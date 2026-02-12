@@ -28,11 +28,15 @@ object LockControlManager {
     @Volatile
     private var forceLockDurationMinutes = 5
     
+    // 自定义锁屏消息
+    @Volatile
+    private var customLockMessage: String? = null
+    
     // 状态监听器
     private val listeners = mutableListOf<OnControlStateChangeListener>()
     
     interface OnControlStateChangeListener {
-        fun onControlModeChanged(mode: ControlMode, durationMinutes: Int)
+        fun onControlModeChanged(mode: ControlMode, durationMinutes: Int, customMessage: String?)
     }
     
     /**
@@ -44,6 +48,11 @@ object LockControlManager {
      * 获取强制锁屏时长
      */
     fun getForceLockDuration(): Int = forceLockDurationMinutes
+    
+    /**
+     * 获取自定义锁屏消息
+     */
+    fun getCustomLockMessage(): String? = customLockMessage
     
     /**
      * 获取状态描述
@@ -59,15 +68,16 @@ object LockControlManager {
     /**
      * 设置控制模式
      */
-    fun setMode(context: Context, mode: ControlMode, durationMinutes: Int = 5) {
-        Log.d(TAG, "setMode: mode=$mode, duration=$durationMinutes")
-        val changed = currentMode != mode || forceLockDurationMinutes != durationMinutes
+    fun setMode(context: Context, mode: ControlMode, durationMinutes: Int = 5, customMessage: String? = null) {
+        Log.d(TAG, "setMode: mode=$mode, duration=$durationMinutes, message=$customMessage")
+        val changed = currentMode != mode || forceLockDurationMinutes != durationMinutes || customLockMessage != customMessage
         if (changed) {
             currentMode = mode
             forceLockDurationMinutes = durationMinutes.coerceIn(1, 60) // 限制1-60分钟
+            customLockMessage = customMessage?.takeIf { it.isNotBlank() }
             // 通知所有监听器
-            listeners.forEach { it.onControlModeChanged(mode, forceLockDurationMinutes) }
-            Log.d(TAG, "Mode changed to: $mode, duration: $forceLockDurationMinutes min, listeners: ${listeners.size}")
+            listeners.forEach { it.onControlModeChanged(mode, forceLockDurationMinutes, customLockMessage) }
+            Log.d(TAG, "Mode changed to: $mode, duration: $forceLockDurationMinutes min, message: $customLockMessage, listeners: ${listeners.size}")
         }
     }
     
@@ -80,11 +90,11 @@ object LockControlManager {
     }
     
     /**
-     * 强制立即锁屏（指定时长）
+     * 强制立即锁屏（指定时长和消息）
      */
-    fun forceLock(context: Context, durationMinutes: Int) {
-        Log.d(TAG, "forceLock called with duration: $durationMinutes min")
-        setMode(context, ControlMode.FORCE_LOCK, durationMinutes)
+    fun forceLock(context: Context, durationMinutes: Int, customMessage: String? = null) {
+        Log.d(TAG, "forceLock called with duration: $durationMinutes min, message: $customMessage")
+        setMode(context, ControlMode.FORCE_LOCK, durationMinutes, customMessage)
     }
     
     /**
@@ -92,6 +102,7 @@ object LockControlManager {
      */
     fun forceUnlock(context: Context) {
         Log.d(TAG, "forceUnlock called")
+        customLockMessage = null // 清除自定义消息
         setMode(context, ControlMode.FORCE_UNLOCK)
     }
     
@@ -100,6 +111,7 @@ object LockControlManager {
      */
     fun resetToAuto(context: Context) {
         Log.d(TAG, "resetToAuto called")
+        customLockMessage = null // 清除自定义消息
         setMode(context, ControlMode.AUTO)
     }
     

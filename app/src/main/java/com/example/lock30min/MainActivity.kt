@@ -237,11 +237,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 显示家长控制面板
+     * 显示家长控制面板（带二维码）
      */
     private fun showAdminPanel() {
         val mode = LockControlManager.getMode()
         val duration = LockControlManager.getForceLockDuration()
+        val customMessage = LockControlManager.getCustomLockMessage()
         val modeText = when (mode) {
             LockControlManager.ControlMode.AUTO -> "自动模式"
             LockControlManager.ControlMode.FORCE_LOCK -> "强制锁屏 ${duration}分钟"
@@ -255,13 +256,53 @@ class MainActivity : AppCompatActivity() {
             "获取失败"
         }
 
-        val message = "当前模式：$modeText\n\n" +
-                "控制地址：\nhttp://$ipAddress:34567/admin?key=...\n\n" +
-                "如需卸载：设置 → 应用管理 → LockApp → 卸载"
+        // 生成二维码
+        val adminUrl = "http://$ipAddress:34567/admin?key=d33a560e81699606e5c9d32341cae435"
+        val qrCodeBitmap = QRCodeGenerator.generateQRCode(adminUrl, 400, 400)
+
+        // 创建布局
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER
+            setPadding(40, 40, 40, 40)
+        }
+
+        // 二维码图片
+        val qrImageView = android.widget.ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(400, 400)
+            if (qrCodeBitmap != null) {
+                setImageBitmap(qrCodeBitmap)
+            }
+            setPadding(0, 0, 0, 20)
+        }
+
+        // 提示文字
+        val hintText = TextView(this).apply {
+            text = "使用另一台手机扫码访问管理页面"
+            textSize = 14f
+            setTextColor(android.graphics.Color.parseColor("#666666"))
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, 0, 0, 20)
+        }
+
+        // 状态信息
+        val messageText = if (!customMessage.isNullOrBlank()) "\n自定义消息：$customMessage\n" else ""
+        val statusText = TextView(this).apply {
+            text = "当前模式：$modeText$messageText\n" +
+                   "控制地址：\n$adminUrl\n\n" +
+                   "如需卸载：设置 → 应用管理 → LockApp → 卸载"
+            textSize = 14f
+            setTextColor(android.graphics.Color.parseColor("#333333"))
+            setPadding(0, 20, 0, 0)
+        }
+
+        layout.addView(qrImageView)
+        layout.addView(hintText)
+        layout.addView(statusText)
 
         AlertDialog.Builder(this)
             .setTitle("家长控制面板")
-            .setMessage(message)
+            .setView(layout)
             .setPositiveButton("确定", null)
             .show()
     }

@@ -34,18 +34,22 @@ class HttpControlServer(private val context: Context, port: Int) : NanoHTTPD(por
                 when (action) {
                     "force_lock" -> {
                         val duration = params["duration"]?.toIntOrNull()?.coerceIn(1, 60) ?: 5
+                        val message = params["message"]?.trim()
                         if (appContext != null) {
-                            LockControlManager.forceLock(appContext, duration)
+                            LockControlManager.forceLock(appContext, duration, message)
+                            Log.d(TAG, "Force lock via HTTP for $duration minutes, message: $message")
                         }
+                        val msgText = if (!message.isNullOrBlank()) "\n消息：$message" else ""
                         newFixedLengthResponse(
                             Response.Status.OK,
                             "text/html",
-                            getSuccessPage("已强制锁屏", "弹窗已立即显示，将锁定 $duration 分钟。", "lock")
+                            getSuccessPage("已强制锁屏", "弹窗已立即显示，将锁定 $duration 分钟。$msgText", "lock")
                         )
                     }
                     "force_unlock" -> {
                         if (appContext != null) {
                             LockControlManager.forceUnlock(appContext)
+                            Log.d(TAG, "Force unlock via HTTP")
                         }
                         newFixedLengthResponse(
                             Response.Status.OK,
@@ -56,6 +60,7 @@ class HttpControlServer(private val context: Context, port: Int) : NanoHTTPD(por
                     "auto" -> {
                         if (appContext != null) {
                             LockControlManager.resetToAuto(appContext)
+                            Log.d(TAG, "Reset to auto via HTTP")
                         }
                         newFixedLengthResponse(
                             Response.Status.OK,
@@ -66,6 +71,7 @@ class HttpControlServer(private val context: Context, port: Int) : NanoHTTPD(por
                     "show_icon" -> {
                         if (appContext != null) {
                             MainActivity.setIconVisible(appContext, true)
+                            Log.d(TAG, "Show icon via HTTP")
                         }
                         newFixedLengthResponse(
                             Response.Status.OK,
@@ -76,6 +82,7 @@ class HttpControlServer(private val context: Context, port: Int) : NanoHTTPD(por
                     "hide_icon" -> {
                         if (appContext != null) {
                             MainActivity.setIconVisible(appContext, false)
+                            Log.d(TAG, "Hide icon via HTTP")
                         }
                         newFixedLengthResponse(
                             Response.Status.OK,
@@ -100,10 +107,11 @@ class HttpControlServer(private val context: Context, port: Int) : NanoHTTPD(por
                 val mode = LockControlManager.getMode()
                 val duration = LockControlManager.getForceLockDuration()
                 val iconVisible = MainActivity.isIconVisible(context)
+                val message = LockControlManager.getCustomLockMessage()
                 newFixedLengthResponse(
                     Response.Status.OK,
                     "application/json",
-                    "{\"mode\": \"$mode\", \"duration\": $duration, \"icon_visible\": $iconVisible}"
+                    "{\"mode\": \"$mode\", \"duration\": $duration, \"icon_visible\": $iconVisible, \"message\": \"${message ?: ""}\"}"
                 )
             }
             else -> {
@@ -254,19 +262,36 @@ class HttpControlServer(private val context: Context, port: Int) : NanoHTTPD(por
             margin: 20px 0 10px 0;
             text-transform: uppercase;
         }
-        input[type="number"] {
-            width: 60px;
+        input[type="number"], input[type="text"] {
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 8px;
-            text-align: center;
             font-size: 16px;
+        }
+        input[type="number"] {
+            width: 60px;
+            text-align: center;
+        }
+        input[type="text"] {
+            width: 100%;
+            margin-top: 8px;
         }
         .lock-form {
             background: #fff5f5;
             border-radius: 12px;
             padding: 15px;
             margin-bottom: 10px;
+        }
+        .form-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .message-hint {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
         }
     </style>
 </head>
@@ -294,12 +319,16 @@ class HttpControlServer(private val context: Context, port: Int) : NanoHTTPD(por
         <form class="lock-form" action="/admin" method="GET">
             <input type="hidden" name="key" value="$ADMIN_KEY">
             <input type="hidden" name="action" value="force_lock">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+            <div class="form-row">
                 <span>锁屏时长：</span>
                 <input type="number" name="duration" value="$defaultDuration" min="1" max="60">
                 <span>分钟</span>
             </div>
-            <button type="submit" class="action-button btn-lock">立即锁屏</button>
+            <div>
+                <input type="text" name="message" placeholder="输入自定义消息（如：你妈叫你吃饭啦）" maxlength="50">
+                <div class="message-hint">留空则显示默认提示</div>
+            </div>
+            <button type="submit" class="action-button btn-lock" style="margin-top: 10px;">立即锁屏</button>
         </form>
         
         <a href="/admin?key=$ADMIN_KEY&action=force_unlock" class="action-button btn-unlock">立即解锁</a>
@@ -351,7 +380,7 @@ class HttpControlServer(private val context: Context, port: Int) : NanoHTTPD(por
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }
         h1 { color: #333; font-size: 22px; margin-bottom: 15px; }
-        p { color: #666; margin-bottom: 25px; }
+        p { color: #666; margin-bottom: 25px; white-space: pre-line; }
         .btn {
             display: inline-block;
             padding: 14px 35px;

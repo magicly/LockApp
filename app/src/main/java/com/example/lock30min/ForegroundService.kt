@@ -67,8 +67,8 @@ class ForegroundService : Service(), LockControlManager.OnControlStateChangeList
     /**
      * 控制模式变化回调
      */
-    override fun onControlModeChanged(mode: LockControlManager.ControlMode, durationMinutes: Int) {
-        Log.d(TAG, "onControlModeChanged: mode=$mode, duration=$durationMinutes")
+    override fun onControlModeChanged(mode: LockControlManager.ControlMode, durationMinutes: Int, customMessage: String?) {
+        Log.d(TAG, "onControlModeChanged: mode=$mode, duration=$durationMinutes, message=$customMessage")
         
         // 更新通知
         updateNotification()
@@ -274,9 +274,15 @@ class ForegroundService : Service(), LockControlManager.OnControlStateChangeList
             setPadding(0, 0, 0, 20)
         }
         
-        // 提示信息
+        // 提示信息（支持自定义消息）
+        val customMessage = LockControlManager.getCustomLockMessage()
+        val displayMessage = if (LockControlManager.getMode() == LockControlManager.ControlMode.FORCE_LOCK && !customMessage.isNullOrBlank()) {
+            customMessage
+        } else {
+            "你已经玩太久了\n去休息放松一下眼睛吧~"
+        }
         val messageText = TextView(this).apply {
-            text = "你已经玩太久了\n去休息放松一下眼睛吧~"
+            text = displayMessage
             textSize = 18f
             setTextColor(Color.parseColor("#666666"))
             gravity = Gravity.CENTER
