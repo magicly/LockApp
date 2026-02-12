@@ -1,10 +1,8 @@
 package com.example.lock30min
 
 import android.app.*
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -12,6 +10,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -19,40 +18,43 @@ import android.widget.*
 import androidx.core.app.NotificationCompat
 import java.util.*
 
-class ForegroundService : Service() {
+class ForegroundService : Service(), LockControlManager.OnControlStateChangeListener {
 
     companion object {
         private const val TAG = "ForegroundService"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "lock_channel"
         
-        // 控制状态
-        @Volatile
-        var isEnabled = true
-        
-        // 检查间隔（秒）
-        private const val CHECK_INTERVAL = 10000L // 10秒检查一次
+        // 检查间隔
+        private const val CHECK_INTERVAL = 3000L // 3秒检查一次
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private val checkRunnable = object : Runnable {
         override fun run() {
-            checkAndShowLockScreen()
+            checkAndUpdateLockScreen()
             handler.postDelayed(this, CHECK_INTERVAL)
         }
     }
     
     private var overlayView: View? = null
     private var countdownTextView: TextView? = null
+    private var countdownRunnable: Runnable? = null
     private val windowManager by lazy { getSystemService(Context.WINDOW_SERVICE) as WindowManager }
     private var httpServer: HttpControlServer? = null
 
     override fun onCreate() {
         super.onCreate()
+        Log.d(TAG, "Service onCreate")
+        
+        // 注册状态监听器
+        LockControlManager.registerListener(this)
+        
         startHttpServer()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "Service onStartCommand")
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
         
@@ -60,6 +62,38 @@ class ForegroundService : Service() {
         handler.post(checkRunnable)
         
         return START_STICKY
+    }
+    
+    /**
+     * 控制模式变化回调
+     */
+    override fun onControlModeChanged(mode: LockControlManager.ControlMode, durationMinutes: Int) {
+        Log.d(TAG, "onControlModeChanged: mode=$mode, duration=$durationMinutes")
+        
+        // 更新通知
+        updateNotification()
+        
+        // 根据模式立即执行相应操作
+        when (mode) {
+            LockControlManager.ControlMode.FORCE_LOCK -> {
+                Log.d(TAG, "Force lock: showing lock screen immediately for $durationMinutes min")
+                handler.post {
+                    showLockScreen()
+                }
+            }
+            LockControlManager.ControlMode.FORCE_UNLOCK -> {
+                Log.d(TAG, "Force unlock: hiding lock screen immediately")
+                handler.post {
+                    hideLockScreen()
+                }
+            }
+            LockControlManager.ControlMode.AUTO -> {
+                Log.d(TAG, "Auto mode: checking time-based lock")
+                handler.post {
+                    checkAndUpdateLockScreen()
+                }
+            }
+        }
     }
 
     private fun createNotificationChannel() {
@@ -80,26 +114,63 @@ class ForegroundService : Service() {
     private fun buildNotification(): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
-            Intent(this, SettingsActivity::class.java),
+            Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
         
+        val statusText = LockControlManager.getStatusText()
+        
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("护眼提醒运行中")
+            .setContentTitle("护眼提醒 - $statusText")
             .setContentText("每小时0-5分和30-35分会提醒休息")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
             .build()
     }
-
-    private fun checkAndShowLockScreen() {
-        // 如果被禁用，不显示弹窗
-        if (!isEnabled) {
-            hideLockScreen()
-            return
+    
+    fun updateNotification() {
+        try {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.notify(NOTIFICATION_ID, buildNotification())
+        } catch (e: Exception) {
+            Log.e(TAG, "更新通知失败", e)
         }
+    }
+
+    /**
+     * 检查并更新锁屏状态
+     */
+    private fun checkAndUpdateLockScreen() {
+        val mode = LockControlManager.getMode()
+        Log.d(TAG, "checkAndUpdateLockScreen: mode=$mode, overlayView=$overlayView")
         
+        when (mode) {
+            LockControlManager.ControlMode.FORCE_LOCK -> {
+                // 强制锁屏：始终显示弹窗
+                if (overlayView == null) {
+                    Log.d(TAG, "Force lock active, showing lock screen")
+                    showLockScreen()
+                }
+            }
+            LockControlManager.ControlMode.FORCE_UNLOCK -> {
+                // 强制解锁：始终隐藏弹窗
+                if (overlayView != null) {
+                    Log.d(TAG, "Force unlock active, hiding lock screen")
+                    hideLockScreen()
+                }
+            }
+            LockControlManager.ControlMode.AUTO -> {
+                // 自动模式：按时间段显示
+                checkTimeBasedLock()
+            }
+        }
+    }
+    
+    /**
+     * 按时间段检查锁屏
+     */
+    private fun checkTimeBasedLock() {
         // 检查当前时间
         val calendar = Calendar.getInstance()
         val minute = calendar.get(Calendar.MINUTE)
@@ -108,9 +179,13 @@ class ForegroundService : Service() {
         // 0-5分钟 或 30-35分钟
         val shouldLock = (minute in 0..5) || (minute in 30..35)
         
+        Log.d(TAG, "Time check: minute=$minute, shouldLock=$shouldLock")
+        
         if (shouldLock && overlayView == null) {
+            Log.d(TAG, "Auto mode: showing lock screen (time-based)")
             showLockScreen()
         } else if (!shouldLock && overlayView != null) {
+            Log.d(TAG, "Auto mode: hiding lock screen (outside lock time)")
             hideLockScreen()
         }
     }
@@ -155,7 +230,7 @@ class ForegroundService : Service() {
             startCountdown()
             
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "显示弹窗失败", e)
         }
     }
 
@@ -267,21 +342,52 @@ class ForegroundService : Service() {
     }
 
     private fun startCountdown() {
-        val calendar = Calendar.getInstance()
-        val minute = calendar.get(Calendar.MINUTE)
-        val second = calendar.get(Calendar.SECOND)
+        val mode = LockControlManager.getMode()
         
         // 计算剩余时间（秒）
-        // 0-5分钟：结束时间是5分0秒
-        // 30-35分钟：结束时间是35分0秒
-        val endMinute = if (minute < 30) 5 else 35
-        val remainingSeconds = (endMinute - minute) * 60 - second
+        val remainingSeconds = when (mode) {
+            LockControlManager.ControlMode.FORCE_LOCK -> {
+                // 强制锁屏：使用设置的时长
+                val durationMinutes = LockControlManager.getForceLockDuration()
+                durationMinutes * 60
+            }
+            else -> {
+                // 自动模式：按时间段计算
+                val calendar = Calendar.getInstance()
+                val minute = calendar.get(Calendar.MINUTE)
+                val second = calendar.get(Calendar.SECOND)
+                val endMinute = when {
+                    minute < 30 -> 5
+                    else -> 35
+                }
+                (endMinute - minute) * 60 - second
+            }
+        }
         
-        val countdownRunnable = object : Runnable {
+        Log.d(TAG, "Starting countdown: mode=$mode, seconds=$remainingSeconds")
+        
+        countdownRunnable = object : Runnable {
             var remaining = remainingSeconds
             
             override fun run() {
                 if (overlayView == null) return
+                
+                // 如果变为强制解锁，停止倒计时
+                val currentMode = LockControlManager.getMode()
+                if (currentMode == LockControlManager.ControlMode.FORCE_UNLOCK) {
+                    Log.d(TAG, "Countdown: force unlock detected, stopping")
+                    return
+                }
+                
+                // 自动模式下，如果不在锁屏时段，停止倒计时
+                if (currentMode == LockControlManager.ControlMode.AUTO) {
+                    val currentMinute = Calendar.getInstance().get(Calendar.MINUTE)
+                    val inLockTime = (currentMinute in 0..5) || (currentMinute in 30..35)
+                    if (!inLockTime) {
+                        Log.d(TAG, "Countdown: outside lock time, stopping")
+                        return
+                    }
+                }
                 
                 if (remaining > 0) {
                     val mins = remaining / 60
@@ -291,20 +397,36 @@ class ForegroundService : Service() {
                     handler.postDelayed(this, 1000)
                 } else {
                     // 倒计时结束，隐藏弹窗
+                    Log.d(TAG, "Countdown finished, hiding lock screen")
                     hideLockScreen()
+                    
+                    // 如果是强制锁屏模式，自动恢复到自动模式
+                    if (currentMode == LockControlManager.ControlMode.FORCE_LOCK) {
+                        Log.d(TAG, "Force lock finished, resetting to auto mode")
+                        LockApp.instance?.applicationContext?.let { ctx ->
+                            LockControlManager.resetToAuto(ctx)
+                        }
+                    }
                 }
             }
         }
         
-        handler.post(countdownRunnable)
+        handler.post(countdownRunnable!!)
     }
 
     private fun hideLockScreen() {
+        // 停止倒计时
+        countdownRunnable?.let {
+            handler.removeCallbacks(it)
+            countdownRunnable = null
+        }
+        
         overlayView?.let {
             try {
                 windowManager.removeView(it)
+                Log.d(TAG, "Lock screen hidden successfully")
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "移除悬浮窗失败", e)
             }
             overlayView = null
             countdownTextView = null
@@ -315,8 +437,9 @@ class ForegroundService : Service() {
         try {
             httpServer = HttpControlServer(this, 34567)
             httpServer?.start()
+            Log.d(TAG, "HTTP server started on port 34567")
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "启动HTTP服务器失败", e)
         }
     }
 
@@ -324,13 +447,18 @@ class ForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        Log.d(TAG, "Service onDestroy")
+        
+        // 取消注册监听器
+        LockControlManager.unregisterListener(this)
+        
         handler.removeCallbacksAndMessages(null)
         hideLockScreen()
         
         try {
             httpServer?.stop()
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "停止HTTP服务器失败", e)
         }
         
         // 重启服务
